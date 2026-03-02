@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Macro Snap Crawler",
+  "version": "1.0.0",
+  "description": "Automate nutrition analysis via Gemini web UI",
+  "permissions": [
+    "sidePanel",
+    "storage",
+    "unlimitedStorage",
+    "activeTab",
+    "scripting",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://gemini.google.com/*",
+    "https://*/"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "Macro Snap Crawler"
+  },
+  "icons": {}
+}

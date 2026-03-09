@@ -158,11 +158,16 @@ async function processAllRounds() {
 
       const result = await processOneRow(row, state.config);
 
-      // On error: clear input to prevent cascade
-      if (result.status === "error") {
-        try {
-          await executeOnTab(state.config.geminiTabId!, clearInputScript, []);
-        } catch { /* best effort */ }
+      // On error: new thread to prevent cascade (clear input doesn't work reliably)
+      if (result.status === "error" && state.config) {
+        await broadcastStep("new_thread", row.rowIndex);
+        console.log(`[MacroSnap] Error on row ${row.rowIndex + 1}. Opening new thread to prevent cascade...`);
+        await navigateToNewThread(state);
+        state = await loadJobState();
+        state.rowsInCurrentThread = 0;
+        state.threadCount = (state.threadCount ?? 1) + 1;
+        await saveJobState(state);
+        await sleep(5000); // wait for page load
       }
 
       await broadcastStep("saving", row.rowIndex);
@@ -300,11 +305,6 @@ async function processOneRow(row: RowData, config: JobConfig): Promise<RowResult
   }
 
   try {
-    // Clear input before starting to prevent leftover data
-    await broadcastStep("clearing_input", row.rowIndex);
-    await executeOnTab(tabId, clearInputScript, []);
-    await sleep(300);
-
     await broadcastStep("fetching_image", row.rowIndex);
     const imageResult = await handleFetchImage(row.imageUrl);
     if (imageResult.error) {

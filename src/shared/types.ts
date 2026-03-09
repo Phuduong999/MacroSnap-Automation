@@ -5,6 +5,7 @@ export interface JobConfig {
   imageColumn: string;
   jsonColumn: string;
   totalRows: number;
+  batchSize: number; // new thread every N rows (0 = no batching)
 }
 
 export interface RowData {
@@ -36,6 +37,7 @@ export interface ParsedResponse {
 
 export type WorkflowStep =
   | "idle"
+  | "clearing_input"
   | "fetching_image"
   | "injecting_image"
   | "waiting_preview"
@@ -44,10 +46,12 @@ export type WorkflowStep =
   | "waiting_response"
   | "parsing"
   | "saving"
+  | "new_thread"
   | "done"
   | "error";
 
 export const WORKFLOW_STEPS: { key: WorkflowStep; label: string }[] = [
+  { key: "clearing_input", label: "Clear input" },
   { key: "fetching_image", label: "Fetch ảnh" },
   { key: "injecting_image", label: "Inject ảnh" },
   { key: "waiting_preview", label: "Đợi preview" },
@@ -78,6 +82,8 @@ export interface JobState {
   currentRound: number;
   roundHistory: RoundHistory[];
   retryQueue: number[]; // rowIndex of error rows to retry
+  rowsInCurrentThread: number; // track rows processed in current thread
+  threadCount: number; // how many threads have been created
 }
 
 // Messages between components

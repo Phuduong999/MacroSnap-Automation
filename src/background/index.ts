@@ -74,6 +74,8 @@ async function handleStartJob(config: JobConfig, rows: RowData[]) {
     currentRound: 1,
     roundHistory: [],
     retryQueue: [],
+    rowsInCurrentThread: 0,
+    threadCount: 1,
   };
   await saveJobState(state);
   broadcastState(state);
@@ -141,13 +143,34 @@ async function processAllRounds() {
       await saveJobState(state);
       broadcastState(state);
 
+      // Check if we need a new thread (batch rotation)
+      const batchSize = state.config.batchSize;
+      if (batchSize > 0 && state.rowsInCurrentThread >= batchSize) {
+        await broadcastStep("new_thread", row.rowIndex);
+        console.log(`[MacroSnap] Batch limit ${batchSize} reached. Opening new thread...`);
+        await navigateToNewThread(state);
+        state = await loadJobState();
+        state.rowsInCurrentThread = 0;
+        state.threadCount = (state.threadCount ?? 1) + 1;
+        await saveJobState(state);
+        await sleep(5000); // wait for page load
+      }
+
       const result = await processOneRow(row, state.config);
+
+      // On error: clear input to prevent cascade
+      if (result.status === "error") {
+        try {
+          await executeOnTab(state.config.geminiTabId!, clearInputScript, []);
+        } catch { /* best effort */ }
+      }
 
       await broadcastStep("saving", row.rowIndex);
       await appendResult(result);
 
       state = await loadJobState();
       state.currentStep = "idle";
+      state.rowsInCurrentThread = (state.rowsInCurrentThread ?? 0) + 1;
       await saveJobState(state);
       broadcastState(state);
 
@@ -259,6 +282,17 @@ async function broadcastStep(step: WorkflowStep, rowIndex: number) {
   broadcastState(state);
 }
 
+async function navigateToNewThread(state: JobState) {
+  if (!state.config) return;
+  const tabId = state.config.geminiTabId;
+  if (!tabId) return;
+
+  // Navigate same tab to geminiUrl (creates a new thread)
+  await chrome.tabs.update(tabId, { url: state.config.geminiUrl });
+
+  console.log(`[MacroSnap] Navigated to new thread in tab ${tabId}`);
+}
+
 async function processOneRow(row: RowData, config: JobConfig): Promise<RowResult> {
   const tabId = config.geminiTabId;
   if (!tabId) {
@@ -266,6 +300,11 @@ async function processOneRow(row: RowData, config: JobConfig): Promise<RowResult
   }
 
   try {
+    // Clear input before starting to prevent leftover data
+    await broadcastStep("clearing_input", row.rowIndex);
+    await executeOnTab(tabId, clearInputScript, []);
+    await sleep(300);
+
     await broadcastStep("fetching_image", row.rowIndex);
     const imageResult = await handleFetchImage(row.imageUrl);
     if (imageResult.error) {
@@ -441,6 +480,36 @@ function waitForResponseScript() {
       }
     }, pollInterval);
   });
+}
+
+function clearInputScript() {
+  try {
+    const editor = document.querySelector(".ql-editor.textarea") as HTMLElement;
+    if (!editor) return { ok: true }; // nothing to clear
+
+    // Clear text content
+    editor.innerHTML = "";
+
+    // Remove any pending image previews
+    const previews = document.querySelectorAll('img[data-test-id^="image-"]');
+    previews.forEach((img) => {
+      // Walk up to find the removable container
+      const container = img.closest("[data-test-id]") || img.parentElement;
+      if (container && container !== editor) {
+        container.remove();
+      }
+    });
+
+    // Also try clicking any "remove" buttons on attached files
+    const removeButtons = document.querySelectorAll(
+      'button[aria-label="Remove file"], button[aria-label="Remove image"]'
+    );
+    removeButtons.forEach((btn) => (btn as HTMLButtonElement).click());
+
+    return { ok: true };
+  } catch (e: any) {
+    return { error: e.message };
+  }
 }
 
 function broadcastState(state: JobState) {

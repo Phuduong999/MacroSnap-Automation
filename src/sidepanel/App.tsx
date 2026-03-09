@@ -21,6 +21,7 @@ import {
   Stepper,
   Loader,
   ThemeIcon,
+  NumberInput,
   rem,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
@@ -45,6 +46,7 @@ export function App() {
   const [jsonColumn, setJsonColumn] = useState<string | null>(null);
   const [jobState, setJobState] = useState<JobState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [batchSize, setBatchSize] = useState<number>(30);
   const [selectedRow, setSelectedRow] = useState<RowResult | null>(null);
   const [detailOpened, { open: openDetail, close: closeDetail }] = useDisclosure(false);
 
@@ -137,6 +139,7 @@ export function App() {
       imageColumn,
       jsonColumn,
       totalRows: rows.length,
+      batchSize,
     };
 
     const rowData: RowData[] = rows.map((row, i) => ({
@@ -201,6 +204,8 @@ export function App() {
   const retryQueue = jobState?.retryQueue ?? [];
   const errorCount = jobState?.results.filter((r) => r.status === "error").length ?? 0;
   const doneCount = jobState?.results.filter((r) => r.status === "done").length ?? 0;
+  const threadCount = jobState?.threadCount ?? 1;
+  const rowsInCurrentThread = jobState?.rowsInCurrentThread ?? 0;
 
   return (
     <Container size="xs" p="md">
@@ -271,6 +276,16 @@ export function App() {
                 onChange={setJsonColumn}
                 disabled={isRunning}
               />
+              <NumberInput
+                label="New thread mỗi N rows"
+                description="0 = không tạo thread mới"
+                value={batchSize}
+                onChange={(val) => setBatchSize(Number(val) || 0)}
+                min={0}
+                max={200}
+                step={10}
+                disabled={isRunning}
+              />
             </Stack>
           </Card>
         )}
@@ -324,6 +339,13 @@ export function App() {
                       Retry {retryQueue.length} error rows — Tab mới
                     </Text>
                   )}
+                  <Badge
+                    size="sm"
+                    color="teal"
+                    variant="light"
+                  >
+                    Thread #{threadCount} ({rowsInCurrentThread} rows)
+                  </Badge>
                 </Group>
               )}
 

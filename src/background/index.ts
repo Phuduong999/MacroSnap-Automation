@@ -333,7 +333,7 @@ async function processOneRow(row: RowData, config: JobConfig): Promise<RowResult
     }
 
     await broadcastStep("clicking_send", row.rowIndex);
-    await sleep(500);
+    await sleep(1000);
     const sendResult = await executeOnTab(tabId, clickSendScript, []);
     if (sendResult?.error) {
       await broadcastStep("error", row.rowIndex);
@@ -432,19 +432,37 @@ function injectTextScript(text: string) {
 }
 
 function clickSendScript() {
-  try {
-    const btn = document.querySelector("button.send-button") as HTMLButtonElement;
-    if (!btn) return { error: "Send button not found" };
+  return new Promise((resolve) => {
+    let elapsed = 0;
+    const maxWait = 10000; // wait up to 10s for button to be ready
+    const pollInterval = 500;
 
-    if (btn.getAttribute("aria-disabled") === "true") {
-      return { error: "Send button disabled" };
-    }
+    const poll = setInterval(() => {
+      const btn = document.querySelector("button.send-button") as HTMLButtonElement;
+      if (!btn) {
+        elapsed += pollInterval;
+        if (elapsed >= maxWait) {
+          clearInterval(poll);
+          resolve({ error: "Send button not found after 10s" });
+        }
+        return;
+      }
 
-    btn.click();
-    return { ok: true };
-  } catch (e: any) {
-    return { error: e.message };
-  }
+      if (btn.getAttribute("aria-disabled") === "true") {
+        elapsed += pollInterval;
+        if (elapsed >= maxWait) {
+          clearInterval(poll);
+          resolve({ error: "Send button still disabled after 10s" });
+        }
+        return;
+      }
+
+      // Button is ready — click it
+      clearInterval(poll);
+      btn.click();
+      resolve({ ok: true });
+    }, pollInterval);
+  });
 }
 
 function waitForResponseScript() {
@@ -452,31 +470,52 @@ function waitForResponseScript() {
     const containers = document.querySelectorAll("structured-content-container");
     const countBefore = containers.length;
     let elapsed = 0;
-    const maxWait = 60000;
+    const maxWait = 90000;
     const pollInterval = 1000;
+    let sawStopButton = false;
 
     const poll = setInterval(() => {
       elapsed += pollInterval;
 
+      const stopBtn = document.querySelector('button[aria-label="Stop response"]');
       const currentContainers = document.querySelectorAll("structured-content-container");
-      if (currentContainers.length > countBefore) {
-        const checkStreaming = setInterval(() => {
-          elapsed += 500;
-          const stopBtn = document.querySelector('button[aria-label="Stop response"]');
-          if (!stopBtn || elapsed > maxWait) {
-            clearInterval(checkStreaming);
-            const all = document.querySelectorAll("structured-content-container");
-            const latest = all[all.length - 1];
-            resolve({ text: latest?.innerText ?? "", ok: true });
-          }
-        }, 500);
+      const hasNewContainer = currentContainers.length > countBefore;
+
+      // Track if stop button ever appeared (means Gemini is streaming)
+      if (stopBtn) {
+        sawStopButton = true;
+      }
+
+      // Response done: stop button was visible but now gone, and we have a new container
+      // OR: new container appeared and no stop button (fast response)
+      if (hasNewContainer && !stopBtn && (sawStopButton || elapsed > 3000)) {
         clearInterval(poll);
+        const all = document.querySelectorAll("structured-content-container");
+        const latest = all[all.length - 1];
+        resolve({ text: latest?.innerText ?? "", ok: true });
+        return;
+      }
+
+      // Also handle: stop button gone + container count same but last container updated
+      // (Gemini sometimes reuses containers)
+      if (sawStopButton && !stopBtn && !hasNewContainer) {
+        clearInterval(poll);
+        const all = document.querySelectorAll("structured-content-container");
+        const latest = all[all.length - 1];
+        resolve({ text: latest?.innerText ?? "", ok: true });
         return;
       }
 
       if (elapsed >= maxWait) {
         clearInterval(poll);
-        resolve({ error: "Response timeout" });
+        // If we have a new container, grab it even on timeout
+        if (hasNewContainer) {
+          const all = document.querySelectorAll("structured-content-container");
+          const latest = all[all.length - 1];
+          resolve({ text: latest?.innerText ?? "", ok: true });
+        } else {
+          resolve({ error: "Response timeout" });
+        }
       }
     }, pollInterval);
   });
